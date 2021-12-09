@@ -1,0 +1,304 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  EventForwarder stackset. Deploy to all desired regions.
+
+Parameters:
+  RepositoryName:
+    Type: String
+    Description: Name for function container repository
+    Default: eventforwarder
+
+  ContainerTag:
+    Type: String
+    Description: Container tag for selection version to run
+    Default: latest
+
+  SSMPRoot:
+    Type: String
+    Description: SSMP Root for eventforwarder configuration
+    Default: /eventforwarder
+
+  InputArnsForEventForwarderSQSQueue:
+    Type: CommaDelimitedList
+    Description: Comma delimited list of arns for queues/topics inserting messages to the EventForwarder's input queue
+    Default: ""
+
+  AdminTopicArn:
+    Type: String
+    Description: SNS topic arn to send errors to; leave empty to create new
+    Default: ""
+
+
+Conditions:
+  HasInputArns: !Not
+    - !Equals
+      - ""
+      - !Join [ "", !Ref InputArnsForEventForwarderSQSQueue ]
+
+  CreateAdminTopic: !Equals [ "", !Ref AdminTopicArn ]
+
+
+Resources:
+  SNSTopicAdmin: 
+    Type: AWS::SNS::Topic
+    Condition: CreateAdminTopic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-AdminNotifications"
+    
+
+  EventForwarderFunctionExecutionRole:  
+    Type: AWS::IAM::Role
+    Properties: 
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement: 
+          - Effect: "Allow"
+            Principal:
+              Service: "lambda.amazonaws.com"
+            Action: "sts:AssumeRole"
+      Description: !Sub "Lambda execution role for ${AWS::StackName} Forwarder function"
+      ManagedPolicyArns: 
+        - "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies: 
+        - !If
+          - CreateAdminTopic
+          - PolicyName: "Allow-for-SNS-publish-for-lambda-errors"
+            PolicyDocument: 
+              Version: "2012-10-17"
+              Statement:
+                - Effect: "Allow"
+                  Action:
+                    - "sns:Publish"
+                  Resource: !Ref SNSTopicAdmin
+          - !Ref AWS::NoValue
+        - PolicyName: "allow-sqs"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - sqs:ReceiveMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+                - sqs:ChangeMessageVisibility
+              Resource: 
+                - !GetAtt EventForwarderQueue.Arn
+        - PolicyName: "allow-ssmp"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            - Effect: Allow
+              Action:
+                - ssm:DescribeParameters
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - "ssm:GetParameter*"
+              Resource: !Sub "arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter${SSMPRoot}/*"
+
+
+  EventForwarderLambdaPermissionSQSInvoke:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: "lambda:InvokeFunction"
+      FunctionName: !GetAtt EventForwarderFunction.Arn
+      Principal: "sqs.amazonaws.com"
+      SourceArn: !GetAtt EventForwarderQueue.Arn
+
+
+  EventForwarderFunction:
+    Type: AWS::Lambda::Function
+    Properties: 
+      Code: 
+        ImageUri: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${RepositoryName}:${ContainerTag}"
+      Description: "EventForwarder"
+      Environment: 
+        Variables:
+          CONFIGPATH: !Sub "${SSMPRoot}/config"
+          TEMPLATEPATH: !Sub "${SSMPRoot}/templates"
+          SNS_ADMIN: !If
+            - CreateAdminTopic
+            - !Ref SNSTopicAdmin
+            - !Ref AdminTopicArn
+      FunctionName: !Sub "EventForwarder-${AWS::Region}"
+      ImageConfig:
+        Command:
+          - "eventforwarder.main.lambda_handler"
+      MemorySize: 128
+      PackageType: Image
+      Role: !GetAtt EventForwarderFunctionExecutionRole.Arn
+      Timeout: 10
+    DependsOn: CWLGLambdaForwarderFunction
+
+
+  CWLGLambdaForwarderFunction:
+    Type: AWS::Logs::LogGroup
+    Properties: 
+      LogGroupName: !Sub "/aws/lambda/EventForwarder-${AWS::Region}"
+      RetentionInDays: 14 
+
+
+  EventForwarderFunctionEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 10
+      Enabled: true
+      EventSourceArn: !GetAtt EventForwarderQueue.Arn
+      FunctionName: !GetAtt EventForwarderFunction.Arn
+
+
+  # You can send events to this SNS-topic or directly to the Forwarder SQS queue
+  SNSTopicForwarder: 
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "${AWS::StackName}-EventForwarderInbound"
+
+
+  SNSSubscriptionForwarder:
+    Type: AWS::SNS::Subscription
+    Properties: 
+      Endpoint: !GetAtt EventForwarderQueue.Arn
+      Protocol: sqs
+      TopicArn: !Ref SNSTopicForwarder
+
+
+  EventForwarderQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 604800
+      VisibilityTimeout: 60
+      QueueName: EventForwarder
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EventForwarderDLQ.Arn
+        maxReceiveCount: 10
+
+
+  EventForwarderQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties: 
+      PolicyDocument:
+        Id: "policy"
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: "*"
+            Action:
+              - "sqs:SendMessage"
+            Resource: !GetAtt EventForwarderQueue.Arn
+            Condition:
+              ArnEquals: 
+                "aws:SourceArn": !Ref SNSTopicForwarder 
+          - !If
+            - HasInputArns 
+            - Effect: "Allow"
+              Principal: "*"
+              Action:
+                - "sqs:SendMessage"
+              Resource: !GetAtt EventForwarderQueue.Arn
+              Condition:
+                ArnEquals:
+                  "aws:SourceArn": !Ref InputArnsForEventForwarderSQSQueue
+            - !Ref AWS::NoValue
+      Queues: 
+        - !Ref EventForwarderQueue
+
+
+  EventForwarderDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 604800
+      VisibilityTimeout: 60
+
+
+  CWQueueDepthAlarmEventForwarderQueue: 
+    Type: AWS::CloudWatch::Alarm
+    Properties: 
+      AlarmDescription: "Alarm if messages are stuck into the queue"
+      Namespace: "AWS/SQS"
+      MetricName: "ApproximateNumberOfMessagesVisible"
+      Dimensions: 
+        - Name: QueueName
+          Value: !GetAtt EventForwarderQueue.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 30
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: ignore
+      AlarmActions: 
+        - !If
+          - CreateAdminTopic
+          - !Ref SNSTopicAdmin
+          - !Ref AdminTopicArn
+      OKActions:
+        - !If
+          - CreateAdminTopic
+          - !Ref SNSTopicAdmin
+          - !Ref AdminTopicArn
+
+
+  CWQueueDepthAlarmEventForwarderDLQ: 
+    Type: AWS::CloudWatch::Alarm
+    Properties: 
+      AlarmDescription: "Alarm if messages are stuck into the DLQ queue"
+      Namespace: "AWS/SQS"
+      MetricName: "ApproximateNumberOfMessagesVisible"
+      Dimensions: 
+        - Name: QueueName
+          Value: !GetAtt EventForwarderDLQ.QueueName
+      Statistic: Maximum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: ignore
+      AlarmActions: 
+        - !If
+          - CreateAdminTopic
+          - !Ref SNSTopicAdmin
+          - !Ref AdminTopicArn
+      OKActions:
+        - !If
+          - CreateAdminTopic
+          - !Ref SNSTopicAdmin
+          - !Ref AdminTopicArn
+
+
+  SSMPTemplatesDefault:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: "Default template for EventForwarder"
+      Name: !Sub "${SSMPRoot}/templates/default"
+      Tier: Intelligent-Tiering
+      Type: String 
+      Value: |
+        ```json
+        {= data =}
+        ```
+
+
+Outputs:
+  ConfigPath:
+    Description: Config json full SSMP path
+    Value: !Sub "${SSMPRoot}/config"
+    Export:
+      Name: "EventForwarder-Config"
+
+  TemplatesPath:
+    Description: Templates root full SSMP path
+    Value: !Sub "${SSMPRoot}/templates"
+    Export:
+      Name: "EventForwarder-Templates"
+
+  InboundTopic:
+    Description: EventForwarder inbound SNS Topic for sending events
+    Value: !Ref SNSTopicForwarder
+    Export:
+      Name: "EventForwarder-InboundTopic"
+
+  InboundQueueArn:
+    Description: EventForwarder inbound SQS Queue arn for subscribing to additional event sources
+    Value: !GetAtt EventForwarderQueue.Arn
+    Export:
+      Name: "EventForwarder-InboundQueueArn"

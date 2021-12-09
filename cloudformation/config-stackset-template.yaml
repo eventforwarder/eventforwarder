@@ -1,0 +1,73 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  EventForwarder configuration stackset.
+  
+  This is a SAMPLE. Modify configuration and then deploy to all regions where the Forwarder stackset has been deployed.
+
+
+Resources:
+  SSMPConfig:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: "Config json for EventForwarder"
+      Name: !ImportValue "EventForwarder-Config"
+      Tier: Intelligent-Tiering
+      Type: String 
+      Value: |
+        {
+            "profiles": {
+                "default": {
+                    "endpoint": "<endpoint-url>"
+                },
+                "awsalerts": {
+                    "endpoint": "<endpoint-url>",
+                    "parameters": {
+                        "channel": "<channel-name>",
+                        "username": "<users-name>",
+                        "icon_emoji": "<user-icon-emoji>",
+                        "text": "@@@@"
+                  },
+                  "template": "mmawsalerts"
+              }
+            },
+            "rules": [
+                {
+                  "rulesets": {
+                    "Or": [
+                      [ "TopicArn", "REGEX", "<sns-topic-name>$" ]
+                    ]
+                  },
+                  "profile": "awsalerts",
+                  "transform": [
+                    "json:Message"
+                  ]
+                }
+            ]
+        }
+
+
+  SSMPTemplatesMMAWSAlerts:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Description: "AWS Alerts for Mattermost sample template for EventForwarder"
+      Name: !Join
+        - "/"
+        - - !ImportValue "EventForwarder-Templates"
+          - mmawsalerts
+      Tier: Intelligent-Tiering
+      Type: String 
+      Value: |
+        #### {= data.Subject =}
+
+        <!channel>
+
+        |  **Key**    |    **Value**                         | 
+        |:------------|:-------------------------------------|
+        | Name        | {= data.Message.AlarmName =}         |
+        | Description | {= data.Message.AlarmDescription =}  |
+        | Account Id  | {= data.Message.AWSAccountId =}      |
+        | Region      | {= data.Message.Region =}            |
+        | State       | {= data.Message.OldStateValue =} :arrow_right: {= data.Message.NewStateValue =} |  
+        | Reason      | {= data.Message.NewStateReason =}    |  
+        | Time        | {= data.Message.StateChangeTime =}   |  

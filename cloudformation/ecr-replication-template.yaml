@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: |
+  EventForwarder ECR Replication Configuration
+
+
+Resources:
+  ECRReplicationConfiguration:
+    Type: AWS::ECR::ReplicationConfiguration
+    Properties: 
+      ReplicationConfiguration: 
+        Rules:
+          - Destinations:
+            - Region: eu-north-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-south-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: eu-west-3
+              RegistryId: !Ref AWS::AccountId
+            - Region: eu-west-2
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-northeast-3
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-northeast-2
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-northeast-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: sa-east-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: ca-central-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-southeast-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-southeast-2
+              RegistryId: !Ref AWS::AccountId
+            - Region: eu-central-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: us-east-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: us-east-2
+              RegistryId: !Ref AWS::AccountId
+            - Region: us-west-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: us-west-2
+              RegistryId: !Ref AWS::AccountId
+            - Region: af-south-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: eu-south-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: me-south-1
+              RegistryId: !Ref AWS::AccountId
+            - Region: ap-east-1
+              RegistryId: !Ref AWS::AccountId
