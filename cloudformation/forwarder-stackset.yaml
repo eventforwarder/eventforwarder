@@ -24,10 +24,12 @@ Parameters:
     Description: Comma delimited list of arns for queues/topics inserting messages to the EventForwarder's input queue
     Default: ""
 
-  AdminTopicArn:
+  AdminTopicIdentifier:
     Type: String
-    Description: SNS topic arn to send errors to; leave empty to create new
-    Default: ""
+    AllowedPattern: "^[0-9]{12}:[a-zA-Z0-9.-_]{1,256}$"
+    Description: "Account id and SNS topic name for admin alerts. Format: <accountid>:<topicname>; must be same region; leave empty to create a new topic"
+
+
 
 
 Conditions:
@@ -36,7 +38,7 @@ Conditions:
       - ""
       - !Join [ "", !Ref InputArnsForEventForwarderSQSQueue ]
 
-  CreateAdminTopic: !Equals [ "", !Ref AdminTopicArn ]
+  CreateAdminTopic: !Equals [ "", !Ref AdminTopicIdentifier ]
 
 
 Resources:
@@ -120,7 +122,7 @@ Resources:
           SNS_ADMIN: !If
             - CreateAdminTopic
             - !Ref SNSTopicAdmin
-            - !Ref AdminTopicArn
+            - !Sub "arn:aws:sns:${AWS::Region}:${AdminTopicIdentifier}"
       FunctionName: !Sub "EventForwarder-${AWS::Region}"
       ImageConfig:
         Command:
@@ -230,12 +232,12 @@ Resources:
         - !If
           - CreateAdminTopic
           - !Ref SNSTopicAdmin
-          - !Ref AdminTopicArn
+          - !Sub "arn:aws:sns:${AWS::Region}:${AdminTopicIdentifier}"
       OKActions:
         - !If
           - CreateAdminTopic
           - !Ref SNSTopicAdmin
-          - !Ref AdminTopicArn
+          - !Sub "arn:aws:sns:${AWS::Region}:${AdminTopicIdentifier}"
 
 
   CWQueueDepthAlarmEventForwarderDLQ: 
@@ -257,12 +259,12 @@ Resources:
         - !If
           - CreateAdminTopic
           - !Ref SNSTopicAdmin
-          - !Ref AdminTopicArn
+          - !Sub "arn:aws:sns:${AWS::Region}:${AdminTopicIdentifier}"
       OKActions:
         - !If
           - CreateAdminTopic
           - !Ref SNSTopicAdmin
-          - !Ref AdminTopicArn
+          - !Sub "arn:aws:sns:${AWS::Region}:${AdminTopicIdentifier}"
 
 
   SSMPTemplatesDefault:
@@ -290,6 +292,13 @@ Outputs:
     Value: !Sub "${SSMPRoot}/templates"
     Export:
       Name: "EventForwarder-Templates"
+
+  AdminTopic:
+    Condition: CreateAdminTopic
+    Description: EventForwarder built-in SNS Topic for admin events
+    Value: !Ref SNSTopicAdmin
+    Export:
+      Name: "EventForwarder-AdminTopic"    
 
   InboundTopic:
     Description: EventForwarder inbound SNS Topic for sending events
